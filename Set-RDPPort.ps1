@@ -2,9 +2,12 @@
 # Set-RDPPort.ps1 (IEX-ready)
 # - 交互式指定端口
 # - 检查端口范围 (1025-65535)
-# - 检查端口是否已被占用（TCP/UDP 任一占用即终止）
+# - 仅检查 TCP 端口是否已被占用（占用则终止）
 # - 写入注册表 RDP PortNumber
-# - 创建/更新防火墙入站规则（TCP+UDP）
+# - 确保防火墙入站规则存在且指向新端口（TCP，Profile=Any）
+#   * 规则不存在：创建
+#   * 规则存在且已指向新端口：不做任何事（不报错、不终止）
+#   * 规则存在但端口不同：更新到新端口
 # - 可选重启 TermService 让端口立即生效
 # - 自动申请管理员权限（适合 IEX / GitHub raw 执行）
 # =========================
@@ -17,6 +20,9 @@ function Ensure-Admin {
   $p  = New-Object Security.Principal.WindowsPrincipal($id)
   if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     Write-Host "需要管理员权限，正在请求 UAC 提升..." -ForegroundColor Yellow
+
+    # IEX 场景：$MyInvocation.MyCommand.Definition 通常是当前脚本内容
+    # 直接用同一段内容在提升后的 powershell 里再次执行
     $args = @(
       "-NoProfile",
       "-ExecutionPolicy", "Bypass",
@@ -44,31 +50,20 @@ function Read-ValidPort {
   }
 }
 
-function Test-PortInUse {
+function Test-TcpPortInUse {
   param([Parameter(Mandatory=$true)][int]$Port)
 
-  $tcpInUse = $false
-  $udpInUse = $false
-
-  # TCP
   try {
     if (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue) {
-      $tcpInUse = @(Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue).Count -gt 0
+      return (@(Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue).Count -gt 0)
     } else {
-      $tcpInUse = (netstat -ano -p tcp | Select-String -Pattern "[:.]$Port\s").Count -gt 0
+      # 兼容旧系统：用 netstat
+      return ((netstat -ano -p tcp | Select-String -Pattern "[:.]$Port\s").Count -gt 0)
     }
-  } catch { $tcpInUse = $true }
-
-  # UDP
-  try {
-    if (Get-Command Get-NetUDPEndpoint -ErrorAction SilentlyContinue) {
-      $udpInUse = @(Get-NetUDPEndpoint -LocalPort $Port -ErrorAction SilentlyContinue).Count -gt 0
-    } else {
-      $udpInUse = (netstat -ano -p udp | Select-String -Pattern "[:.]$Port\s").Count -gt 0
-    }
-  } catch { $udpInUse = $true }
-
-  return ($tcpInUse -or $udpInUse)
+  } catch {
+    # 检查失败时，为安全起见当作占用
+    return $true
+  }
 }
 
 function Get-CurrentRdpPort {
@@ -81,27 +76,45 @@ function Set-RdpPort {
   param([Parameter(Mandatory=$true)][int]$Port)
 
   $path = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp"
+  # PortNumber 是 DWORD（十进制写入即可）
   Set-ItemProperty -Path $path -Name "PortNumber" -Value $Port -Type DWord
 }
 
-function Upsert-FirewallRule {
+function Ensure-FirewallRuleTcpAny {
   param(
     [Parameter(Mandatory=$true)][string]$Name,
-    [Parameter(Mandatory=$true)][string]$Protocol,
     [Parameter(Mandatory=$true)][int]$Port
   )
 
-  $existing = Get-NetFirewallRule -DisplayName $Name -ErrorAction SilentlyContinue
-  if ($null -ne $existing) {
-    Set-NetFirewallRule -DisplayName $Name -Enabled True | Out-Null
-    Set-NetFirewallRule -DisplayName $Name -Profile Any | Out-Null
-    Set-NetFirewallRule -DisplayName $Name -Direction Inbound | Out-Null
-    Set-NetFirewallRule -DisplayName $Name -Action Allow | Out-Null
-    Set-NetFirewallRule -DisplayName $Name -Protocol $Protocol | Out-Null
-    Set-NetFirewallRule -DisplayName $Name -LocalPort $Port | Out-Null
-  } else {
-    New-NetFirewallRule -DisplayName $Name -Profile Any -Direction Inbound -Action Allow -Protocol $Protocol -LocalPort $Port | Out-Null
+  $rule = Get-NetFirewallRule -DisplayName $Name -ErrorAction SilentlyContinue
+
+  if ($null -eq $rule) {
+    New-NetFirewallRule -DisplayName $Name -Profile Any -Direction Inbound -Action Allow -Protocol TCP -LocalPort $Port | Out-Null
+    Write-Host ("已创建防火墙规则：{0} (TCP {1}, Profile=Any)" -f $Name, $Port) -ForegroundColor Green
+    return
   }
+
+  # 规则存在：检查当前端口
+  $pf = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue
+  $currentPort = $null
+  if ($pf) { $currentPort = @($pf)[0].LocalPort }
+
+  $needUpdate = $false
+  if ([string]::IsNullOrWhiteSpace($currentPort) -or $currentPort -eq "Any" -or $currentPort -ne "$Port") {
+    $needUpdate = $true
+  }
+
+  if (-not $needUpdate) {
+    Write-Host ("防火墙规则已存在且已指向目标端口：{0} (TCP {1})，无需处理。" -f $Name, $Port) -ForegroundColor Green
+    return
+  }
+
+  # 更新规则到目标端口，并统一关键属性
+  Set-NetFirewallRule -DisplayName $Name -Enabled True -Profile Any -Direction Inbound -Action Allow | Out-Null
+  # 协议/端口用 PortFilter 来设，兼容性更好
+  Set-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -Protocol TCP -LocalPort $Port | Out-Null
+
+  Write-Host ("防火墙规则已更新：{0} -> TCP {1}, Profile=Any" -f $Name, $Port) -ForegroundColor Yellow
 }
 
 function Restart-RdpServiceIfWanted {
@@ -119,23 +132,24 @@ function Restart-RdpServiceIfWanted {
 # -------------------------
 Ensure-Admin
 
-Write-Host "RDP 端口修改工具（IEX 版本）" -ForegroundColor Cyan
+Write-Host "Windows RDP 端口修改工具（IEX 版本）" -ForegroundColor Cyan
+
 $oldPort = Get-CurrentRdpPort
-Write-Host ("当前 RDP 端口：{0}" -f $oldPort)
+Write-Host ("当前 RDP 端口：{0}" -f $oldPort) -ForegroundColor Cyan
 
 $port = Read-ValidPort
 
-if (Test-PortInUse -Port $port) {
-  Write-Host ("错误：端口 {0} 已被占用（TCP/UDP），不会继续操作。" -f $port) -ForegroundColor Red
+if (Test-TcpPortInUse -Port $port) {
+  Write-Host ("错误：端口 {0} 已被占用（TCP），不会继续操作。" -f $port) -ForegroundColor Red
   exit 1
 }
 
 Write-Host ("端口 {0} 可用，开始写入注册表..." -f $port) -ForegroundColor Green
 Set-RdpPort -Port $port
 
-Write-Host "正在配置防火墙入站规则（TCP/UDP）..." -ForegroundColor Green
-Upsert-FirewallRule -Name "RDPPORTLatest-TCP-In" -Protocol "TCP" -Port $port
-Upsert-FirewallRule -Name "RDPPORTLatest-UDP-In" -Protocol "UDP" -Port $port
+# 只做 TCP + Profile Any
+Write-Host "正在检查并确保防火墙入站规则（TCP，Profile=Any）..." -ForegroundColor Green
+Ensure-FirewallRuleTcpAny -Name "RDPPORTLatest-TCP-In" -Port $port
 
 Write-Host ("完成：RDP 端口已从 {0} 修改为 {1}" -f $oldPort, $port) -ForegroundColor Cyan
 Restart-RdpServiceIfWanted

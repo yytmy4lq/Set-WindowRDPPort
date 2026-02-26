@@ -45,7 +45,7 @@ Open **PowerShell as Administrator** and run:
 ```powershell
 iex ((Invoke-RestMethod https://api.github.com/repos/yytmy4lq/Set-WindowRDPPort/contents/Set-RDPPort.ps1?ref=main).content | % { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) })
 
-
+---
 
 The script will:
 脚本将会：
@@ -60,7 +60,7 @@ The script will:
 	5.	Optionally restart the Remote Desktop service
 可选择立即重启远程桌面服务
 
-⸻
+---
 
 Why Change the RDP Port? | 为什么要修改 RDP 端口？
 
@@ -76,14 +76,14 @@ Changing the default RDP port (3389) helps reduce:
 This is not a replacement for security hardening, but it significantly reduces attack noise.
 这并不能替代安全加固，但能显著减少被扫描和攻击的概率。
 
-⸻
+---
 
 Requirements | 系统要求
 	•	Windows 10 / Windows 11 / Windows Server
 	•	Administrator privileges | 管理员权限
 	•	PowerShell 5.1 or newer
 
-⸻
+---
 
 After Changing the Port | 修改后如何连接
 
@@ -95,7 +95,7 @@ IP_ADDRESS:PORT
 Example | 示例：
 192.168.1.10:33901
 
-⸻
+---
 
 Security Notes | 安全说明
 
@@ -110,7 +110,7 @@ This script:
 	•	Does NOT disable Windows security features
 不会关闭 Windows 安全功能
 
-⸻
+---
 
 Restore Default Port | 恢复默认端口
 
@@ -121,8 +121,7 @@ Default RDP port:
 Simply run the script again and enter 3389.
 再次运行脚本并输入 3389 即可恢复。
 
-
-⸻
+---
 
 Important Notice | 重要提示
 
@@ -132,9 +131,11 @@ Always make sure you have another way to access the machine before changing RDP 
 You may lose remote access if firewall or service restart fails.
 如果防火墙或服务重启失败，可能会导致远程无法连接。
 
-⸻
+---
 
 Disclaimer | 免责声明
 
 This script modifies system configuration. Use at your own risk.
 该脚本会修改系统配置，请自行承担使用风险。
+
+---

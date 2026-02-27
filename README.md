@@ -37,7 +37,8 @@ It is designed to be executed directly from GitHub using PowerShell `IEX` (Invok
 ## Quick Run | 快速执行
 
 Open **PowerShell as Administrator** and run:  
-请以 **管理员身份打开 PowerShell** 并执行：
+请以 **管理员身份打开 PowerShell** 并执行:  
+
 Method1 方法一:
 ```powershell
 iwr https://raw.githubusercontent.com/yytmy4lq/Set-WindowRDPPort/main/Set-RDPPort.ps1 | iex

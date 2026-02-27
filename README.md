@@ -38,8 +38,16 @@ It is designed to be executed directly from GitHub using PowerShell `IEX` (Invok
 
 Open **PowerShell as Administrator** and run:  
 请以 **管理员身份打开 PowerShell** 并执行：
-
+Method1 方法一:
 ```powershell
+iwr https://raw.githubusercontent.com/yytmy4lq/Set-WindowRDPPort/main/Set-RDPPort.ps1 | iex
+```
+Method2 方法二:
+```powershell
+iex (irm https://raw.githubusercontent.com/yytmy4lq/Set-WindowRDPPort/main/Set-RDPPort.ps1)
+```
+Method3 方法三:
+```powershell 回传JSON
 iex ((Invoke-RestMethod https://api.github.com/repos/yytmy4lq/Set-WindowRDPPort/contents/Set-RDPPort.ps1?ref=main).content | % { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) })
 ```
 

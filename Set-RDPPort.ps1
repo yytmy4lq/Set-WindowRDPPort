@@ -1,5 +1,5 @@
 # =========================
-# Set-RDPPort.ps1 (IEX-ready)
+# Set-RDPPort.ps1 (IEX-ready / GitHub-ready)
 # - 交互式指定端口
 # - 检查端口范围 (1025-65535)
 # - 仅检查 TCP 端口是否已被占用（占用则终止）
@@ -9,29 +9,57 @@
 #   * 规则存在且已指向新端口：不做任何事（不报错、不终止）
 #   * 规则存在但端口不同：更新到新端口
 # - 可选重启 TermService 让端口立即生效
-# - 自动申请管理员权限（适合 IEX / GitHub raw 执行）
+# - 自动申请管理员权限（IEX / GitHub raw 执行稳定）
 # =========================
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# IMPORTANT: 这里填你自己的 GitHub raw URL（用于 IEX 场景提权后“自我再下载执行”）
+# 例如：https://raw.githubusercontent.com/<user>/<repo>/main/Set-RDPPort.ps1
+$SelfUrl = "https://raw.githubusercontent.com/yytmy4lq/Set-WindowRDPPort/main/Set-RDPPort.ps1"
+
 function Ensure-Admin {
   $id = [Security.Principal.WindowsIdentity]::GetCurrent()
   $p  = New-Object Security.Principal.WindowsPrincipal($id)
-  if (-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Write-Host "需要管理员权限，正在请求 UAC 提升..." -ForegroundColor Yellow
 
-    # IEX 场景：$MyInvocation.MyCommand.Definition 通常是当前脚本内容
-    # 直接用同一段内容在提升后的 powershell 里再次执行
+  if ($p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    return
+  }
+
+  Write-Host "需要管理员权限，正在请求 UAC 提升..." -ForegroundColor Yellow
+
+  # 1) 如果是从文件运行（双击/本地执行），用 -File 最稳
+  if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
     $args = @(
       "-NoProfile",
       "-ExecutionPolicy", "Bypass",
-      "-Command",
-      "& { $($MyInvocation.MyCommand.Definition) }"
+      "-File", "`"$PSCommandPath`""
     )
     Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $args | Out-Null
+    Write-Host "已在新窗口以管理员权限继续执行（原窗口将退出）。" -ForegroundColor Yellow
+    Start-Sleep -Seconds 2
     exit 0
   }
+
+  # 2) IEX / 远程执行场景：提权后再从 $SelfUrl 下载并执行（避免传递脚本文本出错）
+  if ([string]::IsNullOrWhiteSpace($SelfUrl)) {
+    Write-Host "错误：当前为 IEX 场景，但未设置 SelfUrl，无法在提权后继续执行。" -ForegroundColor Red
+    Write-Host "请在脚本顶部设置 `$SelfUrl 为你的 GitHub raw 地址。" -ForegroundColor Red
+    Read-Host "按回车退出"
+    exit 1
+  }
+
+  $cmd = "[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; iex (irm '$SelfUrl')"
+  $args2 = @(
+    "-NoProfile",
+    "-ExecutionPolicy", "Bypass",
+    "-Command", $cmd
+  )
+  Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $args2 | Out-Null
+  Write-Host "已在新窗口以管理员权限继续执行（原窗口将退出）。" -ForegroundColor Yellow
+  Start-Sleep -Seconds 2
+  exit 0
 }
 
 function Read-ValidPort {
@@ -76,7 +104,6 @@ function Set-RdpPort {
   param([Parameter(Mandatory=$true)][int]$Port)
 
   $path = "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp"
-  # PortNumber 是 DWORD（十进制写入即可）
   Set-ItemProperty -Path $path -Name "PortNumber" -Value $Port -Type DWord
 }
 
@@ -94,24 +121,19 @@ function Ensure-FirewallRuleTcpAny {
     return
   }
 
-  # 规则存在：检查当前端口
+  # 规则存在：读取当前端口
   $pf = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -ErrorAction SilentlyContinue
   $currentPort = $null
   if ($pf) { $currentPort = @($pf)[0].LocalPort }
 
-  $needUpdate = $false
-  if ([string]::IsNullOrWhiteSpace($currentPort) -or $currentPort -eq "Any" -or $currentPort -ne "$Port") {
-    $needUpdate = $true
-  }
-
-  if (-not $needUpdate) {
+  # 已经是目标端口 -> 不做事
+  if (-not [string]::IsNullOrWhiteSpace($currentPort) -and $currentPort -ne "Any" -and $currentPort -eq "$Port") {
     Write-Host ("防火墙规则已存在且已指向目标端口：{0} (TCP {1})，无需处理。" -f $Name, $Port) -ForegroundColor Green
     return
   }
 
-  # 更新规则到目标端口，并统一关键属性
+  # 否则更新到目标端口，并统一关键属性
   Set-NetFirewallRule -DisplayName $Name -Enabled True -Profile Any -Direction Inbound -Action Allow | Out-Null
-  # 协议/端口用 PortFilter 来设，兼容性更好
   Set-NetFirewallPortFilter -AssociatedNetFirewallRule $rule -Protocol TCP -LocalPort $Port | Out-Null
 
   Write-Host ("防火墙规则已更新：{0} -> TCP {1}, Profile=Any" -f $Name, $Port) -ForegroundColor Yellow
@@ -147,7 +169,6 @@ if (Test-TcpPortInUse -Port $port) {
 Write-Host ("端口 {0} 可用，开始写入注册表..." -f $port) -ForegroundColor Green
 Set-RdpPort -Port $port
 
-# 只做 TCP + Profile Any
 Write-Host "正在检查并确保防火墙入站规则（TCP，Profile=Any）..." -ForegroundColor Green
 Ensure-FirewallRuleTcpAny -Name "RDPPORTLatest-TCP-In" -Port $port
 
